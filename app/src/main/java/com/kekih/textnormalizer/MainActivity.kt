@@ -164,73 +164,105 @@ fun TextEditorScreen() {
 }
 
 /**
- * Простое правило-базированное приведение текста к "нормальному виду".
- * Особенно хорошо работает с пошаговыми решениями уравнений / математики.
+ * Приводит грязный текст решения (с кучей $ $$ ### ---) к чистому читаемому виду.
  */
 fun formatToNormalForm(input: String): String {
     if (input.isBlank()) return input
 
-    var result = input
+    var text = input
         .replace("\r\n", "\n")
         .replace("\r", "\n")
-        .trim()
 
-    // Убираем лишние пустые строки
-    result = result.replace(Regex("\n{3,}"), "\n\n")
+    // 1. Убираем все LaTeX-доллары и удвоенные
+    text = text.replace("$$", "")
+    text = text.replace("$", "")
 
-    // Нормализуем пробелы вокруг = и :
-    result = result.replace(Regex("\\s*=\\s*"), " = ")
-    result = result.replace(Regex("\\s*:\\s*"), ": ")
+    // 2. Убираем markdown-разделители и лишние #
+    text = text.replace(Regex("^---+$", RegexOption.MULTILINE), "")
+    text = text.replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
 
-    // Убираем trailing spaces
-    result = result.lines().joinToString("\n") { it.trimEnd() }
+    // 3. Нормализуем пробелы вокруг = и знаков
+    text = text.replace(Regex("\\s*=\\s*"), " = ")
+    text = text.replace(Regex("\\s*\\+\\s*"), " + ")
+    text = text.replace(Regex("\\s*-\\s*"), " - ")
 
-    // Если похоже на решение — структурируем
-    if (result.contains("уравнен") || result.contains("Шаг") || result.contains("x =") || result.contains("y =")) {
-        result = structureMathSolution(result)
-    }
+    // 4. Убираем множественные пустые строки
+    text = text.replace(Regex("\n{3,}"), "\n\n")
 
-    return result.trim() + "\n"
-}
-
-private fun structureMathSolution(text: String): String {
+    // 5. Чистим каждую строку
     val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-    val sb = StringBuilder()
 
-    for (line in lines) {
+    val sb = StringBuilder()
+    var i = 0
+
+    while (i < lines.size) {
+        val line = lines[i]
+
         when {
-            line.startsWith("###") || line.startsWith("##") || line.startsWith("#") -> {
+            // Заголовки шагов
+            line.matches(Regex("(?i).*шаг\\s*\\d+.*")) ||
+            line.matches(Regex("(?i)^шаг\\s*\\d+.*")) -> {
                 sb.appendLine()
-                sb.appendLine(line)
-                sb.appendLine()
-            }
-            line.contains("Шаг") -> {
-                sb.appendLine()
-                sb.appendLine("### $line")
+                sb.appendLine("▸ $line")
                 sb.appendLine()
             }
-            line.startsWith("**") && line.endsWith("**") -> {
+
+            // "Ответ"
+            line.contains("Ответ", ignoreCase = true) ||
+            line.contains("boxed", ignoreCase = true) ||
+            line.contains("✅") -> {
                 sb.appendLine()
-                sb.appendLine(line)
+                sb.appendLine("════════════════════════════════")
+                sb.appendLine("ОТВЕТ")
+                sb.appendLine("════════════════════════════════")
+                sb.appendLine()
+                // следующий текст после "Ответ" тоже добавляем
+                if (!line.equals("Ответ", ignoreCase = true) && !line.startsWith("✅")) {
+                    sb.appendLine(cleanEquation(line))
+                }
             }
-            line.startsWith("- ") || line.startsWith("* ") -> {
-                sb.appendLine(line)
+
+            // Уравнения / формулы (содержат = или ^)
+            line.contains("=") || line.contains("^") || line.contains("²") || line.contains("²") -> {
+                sb.appendLine("  " + cleanEquation(line))
             }
-            line.contains("Ответ") || line.contains("boxed") -> {
-                sb.appendLine()
-                sb.appendLine("---")
-                sb.appendLine()
-                sb.appendLine("### ✅ Ответ")
-                sb.appendLine()
-                sb.appendLine(line)
-            }
+
+            // Обычный текст
             else -> {
-                sb.appendLine(line)
+                // Если это просто номер пункта
+                if (line.matches(Regex("\\d+\\.\\s*.*"))) {
+                    sb.appendLine()
+                    sb.appendLine(line)
+                } else {
+                    sb.appendLine(line)
+                }
             }
         }
+        i++
     }
 
-    return sb.toString()
+    var result = sb.toString()
         .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
+
+    // Финальная полировка
+    result = result
+        .replace("y^2", "y²")
+        .replace("x^2", "x²")
+        .replace("^2", "²")
+        .replace("dfrac", "")
+        .replace("frac", "")
+        .replace("\\", "")
+
+    return result + "\n"
+}
+
+private fun cleanEquation(line: String): String {
+    return line
+        .replace(Regex("\\s*=\\s*"), " = ")
+        .replace(Regex("\\s*\\+\\s*"), " + ")
+        .replace(Regex("\\s*-\\s*"), " - ")
+        .replace("**", "")
+        .replace("__", "")
         .trim()
 }
