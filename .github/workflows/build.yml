@@ -22,7 +22,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Create local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
@@ -32,7 +32,6 @@ jobs:
 
       - name: Ensure Gradle Wrapper
         run: |
-          # Принудительно создаём/обновляем wrapper, чтобы был jar
           gradle wrapper --gradle-version 8.9
           chmod +x ./gradlew
 
