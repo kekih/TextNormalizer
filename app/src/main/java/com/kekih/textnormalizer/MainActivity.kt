@@ -158,15 +158,27 @@ fun TextEditorScreen() {
 fun formatToNormalForm(input: String): String {
     if (input.isBlank()) return input
 
+    // Если текст уже выглядит нормально (есть нормальные переносы и мало мусора) — не трогаем сильно
+    val alreadyClean = !input.contains("$") &&
+            !input.contains("left(") &&
+            !input.contains("right)") &&
+            !input.contains("{9}") &&
+            !input.contains("\\") &&
+            input.lines().size > 5
+
+    if (alreadyClean && input.contains("▸")) {
+        // Уже форматировали — просто подчищаем лишние пустые строки
+        return input.replace(Regex("\n{3,}"), "\n\n").trim() + "\n"
+    }
+
     var t = input
         .replace("\r\n", "\n")
         .replace("\r", "\n")
 
-    // === 1. Убираем весь LaTeX-мусор ===
-    t = t.replace("$$", "")
+    // === 1. Чистка LaTeX ===
+    t = t.replace("$$", "\n")
     t = t.replace("$", "")
 
-    // left / right
     t = t.replace(Regex("\\\\?left\\("), "(")
     t = t.replace(Regex("\\\\?right\\)"), ")")
     t = t.replace("left(", "(")
@@ -174,93 +186,91 @@ fun formatToNormalForm(input: String): String {
     t = t.replace("left", "")
     t = t.replace("right", "")
 
-    // операторы
     t = t.replace(Regex("\\\\?pm"), "±")
     t = t.replace(Regex("\\\\?cdot"), "·")
     t = t.replace(Regex("\\\\?times"), "×")
     t = t.replace("pm", "±")
     t = t.replace("cdot", "·")
 
-    // корни и дроби
     t = t.replace(Regex("\\\\?sqrt"), "√")
     t = t.replace(Regex("\\\\?dfrac"), "")
     t = t.replace(Regex("\\\\?frac"), "")
     t = t.replace("sqrt", "√")
 
-    // степени
     t = t.replace("^2", "²")
     t = t.replace("^3", "³")
-    t = t.replace("y^2", "y²")
-    t = t.replace("x^2", "x²")
 
-    // убираем бэкслэши
     t = t.replace("\\", "")
 
-    // === 2. Чиним дроби вида {a}{b} → a/b ===
-    // несколько проходов, потому что бывают вложенные
-    repeat(4) {
+    // Дроби {a}{b} → a/b
+    repeat(5) {
         t = t.replace(Regex("\\{([^{}]+)\\}\\{([^{}]+)\\}")) { m ->
             "${m.groupValues[1]}/${m.groupValues[2]}"
         }
     }
-    // оставшиеся одиночные скобки {x} → x
     t = t.replace(Regex("\\{([^{}]+)\\}")) { it.groupValues[1] }
 
-    // === 3. Убираем markdown-разметку ===
+    // === 2. Убираем markdown-разметку ===
     t = t.replace(Regex("^---+$", RegexOption.MULTILINE), "")
     t = t.replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
     t = t.replace("**", "")
     t = t.replace("__", "")
 
-    // === 4. Нормализация пробелов ===
-    t = t.replace(Regex("\\s*=\\s*"), " = ")
-    t = t.replace(Regex("\\s*\\+\\s*"), " + ")
-    t = t.replace(Regex("\\s*-\\s*"), " - ")
-    t = t.replace(Regex("\\s{2,}"), " ")
+    // === 3. Нормализация пробелов (но НЕ трогаем переносы строк!) ===
+    t = t.replace(Regex("[ \\t]+", RegexOption.MULTILINE), " ")  // только пробелы и табы
+    t = t.replace(Regex(" *\n *"), "\n")                         // убираем пробелы вокруг \n
 
-    // === 5. Структурируем по строкам ===
-    val lines = t.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    // === 4. Разбиваем на строки и структурируем ===
+    val rawLines = t.split("\n").map { it.trim() }
+
     val sb = StringBuilder()
     var answerPrinted = false
 
-    for (line in lines) {
+    for (line in rawLines) {
+        if (line.isEmpty()) {
+            // сохраняем один пустой рядок максимум
+            if (sb.isNotEmpty() && !sb.endsWith("\n\n")) {
+                sb.appendLine()
+            }
+            continue
+        }
+
         val lower = line.lowercase()
 
         when {
             // Шаги
-            lower.contains("шаг") && (lower.contains("1") || lower.contains("2") ||
-                    lower.contains("3") || lower.contains("4") || lower.contains("5") ||
-                    lower.contains("6") || lower.matches(Regex(".*шаг\\s*\\d+.*"))) -> {
-                sb.appendLine()
+            lower.contains("шаг") && Regex("[1-9]").containsMatchIn(lower) -> {
+                if (sb.isNotEmpty()) sb.appendLine()
                 sb.appendLine("▸ $line")
                 sb.appendLine()
             }
 
-            // Только один раз печатаем заголовок ОТВЕТ
+            // Заголовок ОТВЕТ — только один раз
             (lower.contains("ответ") || lower.contains("boxed")) && !answerPrinted -> {
-                sb.appendLine()
+                if (sb.isNotEmpty()) sb.appendLine()
                 sb.appendLine("════════════════════════")
                 sb.appendLine("ОТВЕТ")
                 sb.appendLine("════════════════════════")
                 sb.appendLine()
                 answerPrinted = true
-                // если в этой же строке есть ещё текст — оставляем
+
                 val cleaned = line
                     .replace(Regex("(?i)ответ"), "")
                     .replace(Regex("(?i)boxed"), "")
                     .replace("✅", "")
+                    .replace("✓", "")
                     .trim()
-                if (cleaned.isNotEmpty() && cleaned.length > 3) {
+                if (cleaned.length > 2) {
                     sb.appendLine(cleaned)
                 }
             }
 
-            // Просто галочки и проверки — оставляем как есть, но без дублирования ОТВЕТ
+            // Строки с галочками
             line.contains("✅") || line.contains("✓") -> {
                 sb.appendLine(line.replace("✅", "✓"))
             }
 
-            // Обычные строки
+            // Обычная строка
             else -> {
                 sb.appendLine(line)
             }
