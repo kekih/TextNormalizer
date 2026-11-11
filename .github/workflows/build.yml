@@ -5,7 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:   # можно запускать вручную
+  workflow_dispatch:
 
 jobs:
   build:
@@ -30,11 +30,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate Gradle Wrapper (if missing)
+      - name: Ensure Gradle Wrapper
         run: |
-          if [ ! -f ./gradlew ]; then
-            gradle wrapper --gradle-version 8.9
-          fi
+          # Принудительно создаём/обновляем wrapper, чтобы был jar
+          gradle wrapper --gradle-version 8.9
           chmod +x ./gradlew
 
       - name: Build Debug APK
