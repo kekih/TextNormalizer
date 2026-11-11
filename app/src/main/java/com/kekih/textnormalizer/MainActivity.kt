@@ -69,7 +69,6 @@ fun TextEditorScreen() {
     var text by remember { mutableStateOf("") }
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
-    val snackbarHostState = remember { SnackbarHostState() }
 
     Scaffold(
         topBar = {
@@ -81,16 +80,12 @@ fun TextEditorScreen() {
                 ),
                 actions = {
                     IconButton(onClick = {
-                        clipboardManager.getText()?.let {
-                            text = it.text
-                        }
+                        clipboardManager.getText()?.let { text = it.text }
                     }) {
                         Icon(Icons.Default.ContentPaste, contentDescription = "Вставить")
                     }
                     IconButton(onClick = {
-                        if (text.isNotBlank()) {
-                            clipboardManager.setText(AnnotatedString(text))
-                        }
+                        if (text.isNotBlank()) clipboardManager.setText(AnnotatedString(text))
                     }) {
                         Icon(Icons.Default.ContentCopy, contentDescription = "Копировать")
                     }
@@ -100,12 +95,9 @@ fun TextEditorScreen() {
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = {
-                    text = formatToNormalForm(text)
-                },
+                onClick = { text = formatToNormalForm(text) },
                 icon = { Icon(Icons.Default.AutoFixHigh, contentDescription = null) },
                 text = { Text("Исправить") },
                 containerColor = MaterialTheme.colorScheme.primary,
@@ -146,7 +138,7 @@ fun TextEditorScreen() {
                         lineHeight = 22.sp
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    decorationBox = { innerTextField ->
+                    decorationBox = { inner ->
                         if (text.isEmpty()) {
                             Text(
                                 "Вставь сюда текст...",
@@ -155,7 +147,7 @@ fun TextEditorScreen() {
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        innerTextField()
+                        inner()
                     }
                 )
             }
@@ -163,106 +155,119 @@ fun TextEditorScreen() {
     }
 }
 
-/**
- * Приводит грязный текст решения (с кучей $ $$ ### ---) к чистому читаемому виду.
- */
 fun formatToNormalForm(input: String): String {
     if (input.isBlank()) return input
 
-    var text = input
+    var t = input
         .replace("\r\n", "\n")
         .replace("\r", "\n")
 
-    // 1. Убираем все LaTeX-доллары и удвоенные
-    text = text.replace("$$", "")
-    text = text.replace("$", "")
+    // === 1. Убираем весь LaTeX-мусор ===
+    t = t.replace("$$", "")
+    t = t.replace("$", "")
 
-    // 2. Убираем markdown-разделители и лишние #
-    text = text.replace(Regex("^---+$", RegexOption.MULTILINE), "")
-    text = text.replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
+    // left / right
+    t = t.replace(Regex("\\\\?left\\("), "(")
+    t = t.replace(Regex("\\\\?right\\)"), ")")
+    t = t.replace("left(", "(")
+    t = t.replace("right)", ")")
+    t = t.replace("left", "")
+    t = t.replace("right", "")
 
-    // 3. Нормализуем пробелы вокруг = и знаков
-    text = text.replace(Regex("\\s*=\\s*"), " = ")
-    text = text.replace(Regex("\\s*\\+\\s*"), " + ")
-    text = text.replace(Regex("\\s*-\\s*"), " - ")
+    // операторы
+    t = t.replace(Regex("\\\\?pm"), "±")
+    t = t.replace(Regex("\\\\?cdot"), "·")
+    t = t.replace(Regex("\\\\?times"), "×")
+    t = t.replace("pm", "±")
+    t = t.replace("cdot", "·")
 
-    // 4. Убираем множественные пустые строки
-    text = text.replace(Regex("\n{3,}"), "\n\n")
+    // корни и дроби
+    t = t.replace(Regex("\\\\?sqrt"), "√")
+    t = t.replace(Regex("\\\\?dfrac"), "")
+    t = t.replace(Regex("\\\\?frac"), "")
+    t = t.replace("sqrt", "√")
 
-    // 5. Чистим каждую строку
-    val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    // степени
+    t = t.replace("^2", "²")
+    t = t.replace("^3", "³")
+    t = t.replace("y^2", "y²")
+    t = t.replace("x^2", "x²")
 
+    // убираем бэкслэши
+    t = t.replace("\\", "")
+
+    // === 2. Чиним дроби вида {a}{b} → a/b ===
+    // несколько проходов, потому что бывают вложенные
+    repeat(4) {
+        t = t.replace(Regex("\\{([^{}]+)\\}\\{([^{}]+)\\}")) { m ->
+            "${m.groupValues[1]}/${m.groupValues[2]}"
+        }
+    }
+    // оставшиеся одиночные скобки {x} → x
+    t = t.replace(Regex("\\{([^{}]+)\\}")) { it.groupValues[1] }
+
+    // === 3. Убираем markdown-разметку ===
+    t = t.replace(Regex("^---+$", RegexOption.MULTILINE), "")
+    t = t.replace(Regex("^#{1,6}\\s*", RegexOption.MULTILINE), "")
+    t = t.replace("**", "")
+    t = t.replace("__", "")
+
+    // === 4. Нормализация пробелов ===
+    t = t.replace(Regex("\\s*=\\s*"), " = ")
+    t = t.replace(Regex("\\s*\\+\\s*"), " + ")
+    t = t.replace(Regex("\\s*-\\s*"), " - ")
+    t = t.replace(Regex("\\s{2,}"), " ")
+
+    // === 5. Структурируем по строкам ===
+    val lines = t.lines().map { it.trim() }.filter { it.isNotEmpty() }
     val sb = StringBuilder()
-    var i = 0
+    var answerPrinted = false
 
-    while (i < lines.size) {
-        val line = lines[i]
+    for (line in lines) {
+        val lower = line.lowercase()
 
         when {
-            // Заголовки шагов
-            line.matches(Regex("(?i).*шаг\\s*\\d+.*")) ||
-            line.matches(Regex("(?i)^шаг\\s*\\d+.*")) -> {
+            // Шаги
+            lower.contains("шаг") && (lower.contains("1") || lower.contains("2") ||
+                    lower.contains("3") || lower.contains("4") || lower.contains("5") ||
+                    lower.contains("6") || lower.matches(Regex(".*шаг\\s*\\d+.*"))) -> {
                 sb.appendLine()
                 sb.appendLine("▸ $line")
                 sb.appendLine()
             }
 
-            // "Ответ"
-            line.contains("Ответ", ignoreCase = true) ||
-            line.contains("boxed", ignoreCase = true) ||
-            line.contains("✅") -> {
+            // Только один раз печатаем заголовок ОТВЕТ
+            (lower.contains("ответ") || lower.contains("boxed")) && !answerPrinted -> {
                 sb.appendLine()
-                sb.appendLine("════════════════════════════════")
+                sb.appendLine("════════════════════════")
                 sb.appendLine("ОТВЕТ")
-                sb.appendLine("════════════════════════════════")
+                sb.appendLine("════════════════════════")
                 sb.appendLine()
-                // следующий текст после "Ответ" тоже добавляем
-                if (!line.equals("Ответ", ignoreCase = true) && !line.startsWith("✅")) {
-                    sb.appendLine(cleanEquation(line))
+                answerPrinted = true
+                // если в этой же строке есть ещё текст — оставляем
+                val cleaned = line
+                    .replace(Regex("(?i)ответ"), "")
+                    .replace(Regex("(?i)boxed"), "")
+                    .replace("✅", "")
+                    .trim()
+                if (cleaned.isNotEmpty() && cleaned.length > 3) {
+                    sb.appendLine(cleaned)
                 }
             }
 
-            // Уравнения / формулы (содержат = или ^)
-            line.contains("=") || line.contains("^") || line.contains("²") || line.contains("²") -> {
-                sb.appendLine("  " + cleanEquation(line))
+            // Просто галочки и проверки — оставляем как есть, но без дублирования ОТВЕТ
+            line.contains("✅") || line.contains("✓") -> {
+                sb.appendLine(line.replace("✅", "✓"))
             }
 
-            // Обычный текст
+            // Обычные строки
             else -> {
-                // Если это просто номер пункта
-                if (line.matches(Regex("\\d+\\.\\s*.*"))) {
-                    sb.appendLine()
-                    sb.appendLine(line)
-                } else {
-                    sb.appendLine(line)
-                }
+                sb.appendLine(line)
             }
         }
-        i++
     }
 
-    var result = sb.toString()
+    return sb.toString()
         .replace(Regex("\n{3,}"), "\n\n")
-        .trim()
-
-    // Финальная полировка
-    result = result
-        .replace("y^2", "y²")
-        .replace("x^2", "x²")
-        .replace("^2", "²")
-        .replace("dfrac", "")
-        .replace("frac", "")
-        .replace("\\", "")
-
-    return result + "\n"
-}
-
-private fun cleanEquation(line: String): String {
-    return line
-        .replace(Regex("\\s*=\\s*"), " = ")
-        .replace(Regex("\\s*\\+\\s*"), " + ")
-        .replace(Regex("\\s*-\\s*"), " - ")
-        .replace("**", "")
-        .replace("__", "")
-        .trim()
+        .trim() + "\n"
 }
